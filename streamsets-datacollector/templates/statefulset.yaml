@@ -1,0 +1,156 @@
+apiVersion: "apps/v1"
+kind: StatefulSet
+metadata:
+  name: {{ include "streamsets-datacollector.fullname" . }}
+  labels:
+    {{- include "streamsets-datacollector.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "streamsets-datacollector.selectorLabels" . | nindent 6 }}
+  serviceName: {{ template "streamsets-datacollector.fullname" . }}
+  replicas: {{ .Values.replicaCount }}
+  template:
+    metadata:
+      labels:
+        {{- include "streamsets-datacollector.labels" . | nindent 8 }}
+        {{- if .Values.podAnnotations }}
+        annotations:
+{{ toYaml .Values.podAnnotations | indent 8 }}
+        {{- end }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds}}
+      initContainers:
+      - name: {{ .Chart.Name }}-init
+        image: busybox
+        command: ["/bin/sh", "-c"]
+        args:
+          - >
+            set -x; BASE_URL=https://archives.streamsets.com/datacollector
+            && for s in `cat /tmp/sdc-stage-libs`; 
+            do 
+              wget ${BASE_URL}/${SDC_VERSION}/tarball/${s}-${SDC_VERSION}.tgz; 
+              tar -xvf ${s}-${SDC_VERSION}.tgz -C /tmp;
+            done
+            && cp -R /tmp/streamsets-datacollector-${SDC_VERSION}/streamsets-libs/streamsets-* /opt/streamsets-datacollector-${SDC_VERSION}/streamsets-libs/
+            &&  rm -rf /opt/streamsets-datacollector-${SDC_VERSION}/streamsets-libs/lost+found
+            && echo 'Here is a listing of the /opt/streamsets-datacollector-${SDC_VERSION}/streamsets-libs/ dir'
+            && ls -l /opt/streamsets-datacollector-${SDC_VERSION}/streamsets-libs/
+            && chown -R 20159 /data /opt/streamsets-datacollector-${SDC_VERSION} /opt/sdc-extras
+        volumeMounts:
+        - name: data
+          mountPath: /data
+          subPath: data
+        - name: data
+          mountPath: /opt/streamsets-datacollector-{{ .Values.image.tag | default .Chart.AppVersion }}/streamsets-libs
+          subPath: stagelibs
+        - name: data
+          mountPath: /opt/sdc-extras
+          subPath: sdc-extras
+        - name: config
+          mountPath: /tmp/sdc-stage-libs
+          subPath: sdc-stage-libs
+        - name: config
+          mountPath: /tmp/sdc-enterprise-stage-libs
+          subPath: sdc-enterprise-stage-libs
+        env:
+          - name: SDC_VERSION
+            value: {{ .Values.image.tag | default .Chart.AppVersion }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 18630
+              protocol: TCP
+          # livenessProbe:
+          #   httpGet:
+          #     path: /public-rest/ping
+          #     port: http
+          # readinessProbe:
+          #   httpGet:
+          #     path: /public-rest/ping
+          #     port: http
+          {{- if .Values.pipelinesConfigmapname }}
+          lifecycle:
+              postStart:
+                exec:
+                  command:
+                    - "bash"
+                    - "-c"
+                    - |
+                      sleep 120;
+                      for pipeline in /import/*; do 
+                         PIPELINENAME=`basename "$pipeline"`;
+                        /opt/streamsets-datacollector-{{ .Values.image.tag | default .Chart.AppVersion }}/bin/streamsets cli -U http://localhost:18630 -u admin -p admin store import -n $PIPELINENAME -f   $pipeline;
+                      done
+          {{- end }}
+          env:
+          - name: SDC_VERSION
+            value: {{ .Values.image.tag | default .Chart.AppVersion }}
+          - name: SDC_JAVA_OPTS
+            value: "-Xmx{{ .Values.configuration.memoryHeap}} -Xms{{ .Values.configuration.memoryHeap}}"
+          - name: STREAMSETS_LIBRARIES_EXTRA_DIR
+            value: "/opt/sdc-extras/"
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+          volumeMounts:
+          - name: data
+            mountPath: /data
+            subPath: data
+          - name: data
+            mountPath: /opt/streamsets-datacollector-{{ .Values.image.tag | default .Chart.AppVersion }}/streamsets-libs
+            subPath: stagelibs
+          - name: data
+            mountPath: /opt/sdc-extras
+            subPath: sdc-extras
+          - name: config
+            mountPath: /etc/sdc/sdc.properties
+            subPath: sdc.properties
+          {{- if .Values.pipelinesConfigmapname }}
+          - name: {{ .Values.pipelinesConfigmapname }}
+            mountPath: /import
+          {{- end }}
+
+      {{- with .Values.nodeAffinity }}
+        nodeAffinity:
+        {{ toYaml . | indent 10 }}
+      {{- end }}
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ template "streamsets-datacollector.fullname" . }}
+        {{- if .Values.pipelinesConfigmapname }}
+        - name: {{ .Values.pipelinesConfigmapname }}
+          configMap:
+            name: {{ .Values.pipelinesConfigmapname }}
+        {{- end }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+        - {{ .Values.persistence.accessMode | quote }}
+    {{- if .Values.persistence.storageClass }}
+    {{- if (eq "-" .Values.persistence.storageClass) }}
+      storageClassName: ""
+    {{- else }}
+      storageClassName: "{{ .Values.persistence.storageClass }}"
+    {{- end }}
+    {{- end }}
+      resources:
+        requests:
+          storage: "{{ .Values.persistence.size }}"
+  {{ end }}

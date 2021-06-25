@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  streamsets-datacollector:
+  - apiVersion: v2
+    appVersion: 3.22.2
+    created: "2021-06-25T13:44:12.355172+10:00"
+    description: A Helm chart for  streamsets-datacollector
+    digest: 1c3e65e1e7733fa440b28ab2c17b4c3815509593fd5f73e05ac0ba6df5a71768
+    name: streamsets-datacollector
+    type: application
+    urls:
+    - https://qxmips.github.io/helm-charts/streamsets-datacollector-0.0.1.tgz
+    version: 0.0.1
+generated: "2021-06-25T13:44:12.352904+10:00"
